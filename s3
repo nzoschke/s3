@@ -12,7 +12,13 @@ import sys
 import tempfile
 from time import time
 import urllib
-from urlparse import urlparse
+import urlparse
+
+def register_scheme(scheme):
+  for method in filter(lambda s: s.startswith("uses_"), dir(urlparse)):
+    getattr(urlparse, method).append(scheme)
+
+register_scheme("s3")
 
 def log(*data):
   # log() is a decorator if first argument is a function, otherwise a printer
@@ -53,19 +59,61 @@ def log(*data):
   sys.stderr.write(" ".join(kvs) + "\n")
 
 class S3(object):
-  def __init__(self, method, src=None, dest=None, url=False, ttl=30):
+  def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
     self.method = method
     self.src    = src
     self.dest   = dest
+    self.hash   = hash
     self.ttl    = ttl
-
-    if os.path.isdir(self.dest):
-      self.dest = os.path.join(self.dest, os.path.basename(self.src))
 
     m = self.method
     if url:
       m += "_url"
     self.__getattribute__(m)()
+
+  def exit(self, msg, code=1):
+    sys.stderr.write(msg.strip() + "\n")
+    sys.exit(code)
+
+  def get_dest(self):
+    return self._dest
+
+  def get_src(self):
+    return self._src
+
+  def set_dest(self, value):
+    self._dest = self.resolve_path(value)
+
+    # if dest is a "directory", append the target filename. TODO: dont do this?
+    if self._dest.endswith("/"):
+      self._dest += os.path.basename(self.src)
+
+  def set_src(self, value):
+    self._src = self.resolve_path(value)
+
+  def resolve_path(self, url):
+    r = list(urlparse.urlsplit(url)) # [scheme, netloc, path, query, fragment]
+
+    if r[0] not in ["", "file", "s3"]:
+      self.exit("error: path must be s3://bucket/... or [file://]... format", code=2)
+
+    if r[0] == "s3":
+      if r[2] == "":
+        r[2] = "/"
+      return urlparse.SplitResult(*r).geturl()
+
+    if r[0] == "file":
+      if not url.startswith("file://"):
+        self.exit("error: path must be s3://bucket/... or [file://]... format", code=2)
+      url = url[7:] # remove file://
+
+    p = os.path.abspath(url)
+    if not os.path.exists(p):
+      self.exit("error: path '%s' does not exist" % p, code=2)
+    return p
+
+  dest = property(get_dest, set_dest)
+  src  = property(get_src,  set_src)
 
   @staticmethod
   def curl(request, path, url, log_ctx=[]):
@@ -118,7 +166,7 @@ class S3(object):
       print "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set"
       sys.exit(1)
 
-    uri     = urlparse(url)
+    uri     = urlparse.urlparse(url)
     bucket  = uri.hostname
     key     = uri.path[1:]
     expires = int(time()) + ttl
