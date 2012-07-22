@@ -86,7 +86,7 @@ class S3(object):
 
     # if dest is a "directory", append the target filename. TODO: dont do this?
     if self._dest.endswith("/"):
-      self._dest += os.path.basename(self.src)
+      self.dest += os.path.basename(self.src)
 
   def set_src(self, value):
     self._src = self.resolve_path(value)
