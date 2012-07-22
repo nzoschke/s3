@@ -89,9 +89,9 @@ class S3(object):
       self.dest += os.path.basename(self.src)
 
   def set_src(self, value):
-    self._src = self.resolve_path(value)
+    self._src = self.resolve_path(value, test=True)
 
-  def resolve_path(self, url):
+  def resolve_path(self, url, test=False):
     r = list(urlparse.urlsplit(url)) # [scheme, netloc, path, query, fragment]
 
     if r[0] not in ["", "file", "s3"]:
@@ -108,8 +108,9 @@ class S3(object):
       url = url[7:] # remove file://
 
     p = os.path.abspath(url)
-    if not os.path.exists(p):
-      self.exit("error: path '%s' does not exist" % p, code=2)
+    if test:
+      if not os.path.exists(p):
+        self.exit("error: path '%s' does not exist" % p, code=2)
     return p
 
   dest = property(get_dest, set_dest)
