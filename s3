@@ -84,10 +84,6 @@ class S3(object):
   def set_dest(self, value):
     self._dest = self.resolve_path(value)
 
-    # if dest is a "directory", append the target filename. TODO: dont do this?
-    if self._dest.endswith("/"):
-      self.dest += os.path.basename(self.src)
-
   def set_src(self, value):
     self._src = self.resolve_path(value, test=True)
 
@@ -98,8 +94,8 @@ class S3(object):
       self.exit("error: path must be s3://bucket/... or [file://]... format", code=2)
 
     if r[0] == "s3":
-      if r[2] == "":
-        r[2] = "/"
+      if r[2] == "" or r[2].endswith("/"):
+        self.exit("error: s3 path must include filename", code=2)
       return urlparse.SplitResult(*r).geturl()
 
     if r[0] == "file":
