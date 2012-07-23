@@ -82,32 +82,40 @@ class S3(object):
   STDOUT = sys.stdout
 
   def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
-    self.method = method.upper()
+    self.method = method
     self.src    = S3.path(src)
     self.dest   = S3.path(dest)
     self.hash   = hash
     self.ttl    = ttl
 
     d = [p.startswith("s3://") for p in [self.src, self.dest]]
-    if method == "GET" and d != [True, False]:
+    if method == "get" and d != [True, False]:
       S3.exit("error: GET must be s3://... => file", 2)
-    if method == "PUT" and d != [True, False]:
+    if method == "get" and d != [True, False]:
       S3.exit("error: PUT must be file => s3://...", 2)
 
+    m = self.method
+    if url:
+      m += "_url"
+    S3.exit(None, self.__getattribute__(m)())
 
   @log
   def get(self, log_ctx=[]):
-    return S3.curl("GET", self.dest, S3.signed_url("GET", self.src),  log_ctx)
+    code = S3.curl("GET", self.dest, S3.signed_url("GET", self.src),  log_ctx=log_ctx)
+    return code == 200 and 0 or code
 
   @log
   def put(self, log_ctx=[]):
-    return S3.curl("PUT", self.src,  S3.signed_url("PUT", self.dest), log_ctx)
+    code = S3.curl("PUT", self.src,  S3.signed_url("PUT", self.dest), log_ctx=log_ctx)
+    return code == 200 and 0 or code
 
   def get_url(self):
-    print S3.signed_url("GET", self.src,  self.ttl)
+    S3.STDOUT.write(S3.signed_url("GET", self.src,  self.ttl) + "\n")
+    return 0
 
   def put_url(self):
-    print S3.signed_url("PUT", self.dest, self.ttl)
+    S3.STDOUT.write(S3.signed_url("PUT", self.dest, self.ttl) + "\n")
+    return 0
 
   @staticmethod
   def curl(request, path, url, cmd=["curl", "--config", "-"], log_ctx=[]):
@@ -157,8 +165,9 @@ class S3(object):
     return int(h["code"])
 
   @staticmethod
-  def exit(msg, code=1):
-    S3.STDERR.write(msg.strip() + "\n")
+  def exit(msg=None, code=1):
+    if msg:
+      S3.STDERR.write(msg.strip() + "\n")
     sys.exit(code)
 
   @staticmethod
