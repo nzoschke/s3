@@ -85,7 +85,6 @@ class S3(object):
     self.method = method
     self.src    = S3.path(src)
     self.dest   = S3.path(dest)
-    self.hash   = hash
     self.ttl    = ttl
 
     d = [p.startswith("s3://") for p in [self.src, self.dest]]
@@ -94,15 +93,19 @@ class S3(object):
     if method == "put" and d != [False, True]:
       S3.exit("error: PUT must be file => s3://...", 2)
 
+    if hash:
+      self.src  = S3.hash(self.src)
+      self.dest = S3.hash(self.dest)
+
   @log
   def get(self, log_ctx=[]):
     code = S3.curl("GET", self.dest, S3.signed_url("GET", self.src),  log_ctx=log_ctx)
-    return code == 200 and 0 or code
+    return 0 if code == 200 else code
 
   @log
   def put(self, log_ctx=[]):
     code = S3.curl("PUT", self.src,  S3.signed_url("PUT", self.dest), log_ctx=log_ctx)
-    return code == 200 and 0 or code
+    return 0 if code == 200 else code
 
   def get_url(self):
     S3.STDOUT.write(S3.signed_url("GET", self.src,  self.ttl) + "\n")
@@ -177,6 +180,9 @@ class S3(object):
       S3.exit("error: S3_PATH_KEY not in v1:c39c... format", 2)
 
     m   = re.compile("^(s3://[^\/]+)(.*)").match(p)
+    if not m:
+      return p
+
     b,p = m.groups()
     return "%s/%s/%s" % (b, k[0], hmac.new(k[1], p, sha).hexdigest())
 
@@ -232,16 +238,18 @@ if __name__ == "__main__":
   parser_get = subparsers.add_parser("get")
   parser_put = subparsers.add_parser("put")
 
-  parser_get.add_argument("--src",  help="source URL to GET object", required=True)
-  parser_get.add_argument("--dest", help="destination path to write object (default .)", default=".")
-  parser_get.add_argument("--url",  help="generate signed URL instead of performing GET", action="store_true")
-  parser_get.add_argument("--ttl",  help="signed URL time to live in seconds (default 30)", type=int, default=30)
+  parser_get.add_argument("--src",    help="source URL to GET object", required=True)
+  parser_get.add_argument("--dest",   help="destination path to write object (default .)", default=".")
+  parser_get.add_argument("--hash",   help="hash S3 path with S3_PATH_KEY", action="store_true")
+  parser_get.add_argument("--url",    help="generate signed URL instead of performing GET", action="store_true")
+  parser_get.add_argument("--ttl",    help="signed URL time to live in seconds (default 30)", type=int, default=30)
   parser_get.set_defaults(method="get")
 
-  parser_put.add_argument("--src",  help="source path to read object")
-  parser_put.add_argument("--dest", help="destination URL to PUT object (s3://...)", required=True)
-  parser_put.add_argument("--url",  help="generate signed URL instead of performing PUT", action="store_true")
-  parser_put.add_argument("--ttl",  help="signed URL time to live in seconds (default 30)", type=int, default=30)
+  parser_put.add_argument("--src",    help="source path to read object")
+  parser_put.add_argument("--dest",   help="destination URL to PUT object (s3://...)", required=True)
+  parser_put.add_argument("--hash",   help="hash S3 path with S3_PATH_KEY", action="store_true")
+  parser_put.add_argument("--url",    help="generate signed URL instead of performing PUT", action="store_true")
+  parser_put.add_argument("--ttl",    help="signed URL time to live in seconds (default 30)", type=int, default=30)
   parser_put.set_defaults(method="put")
 
   # read S3_DEST, S3_SRC args from env
@@ -252,7 +260,7 @@ if __name__ == "__main__":
       argv += ["--%s" % f, os.environ[k]]
 
   args = parser.parse_args(argv)
-  s3 = S3(args.method, src=args.src, dest=args.dest, ttl=args.ttl)
+  s3 = S3(args.method, src=args.src, dest=args.dest, hash=args.hash, ttl=args.ttl)
 
   m = args.method
   if args.url:
