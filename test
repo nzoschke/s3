@@ -16,7 +16,17 @@ class S3(object):
   STDERR = sys.stderr
 
   def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
-    pass
+    self.method = method.upper()
+    self.src    = S3.path(src)
+    self.dest   = S3.path(dest)
+    self.hash   = hash
+    self.ttl    = ttl
+
+    d = [p.startswith("s3://") for p in [self.src, self.dest]]
+    if method == "GET" and d != [True, False]:
+      S3.exit("error: GET must be s3://... => file", 2)
+    if method == "PUT" and d != [True, False]:
+      S3.exit("error: PUT must be file => s3://...", 2)
 
   @staticmethod
   def exit(msg, code=1):
@@ -62,10 +72,22 @@ class S3(object):
 class TestS3(unittest.TestCase):
   def setUp(self):
     S3.STDERR = _stderr()
-    self.s3 = S3("get")
 
   def tearDown(self):
     S3.STDERR = sys.stderr
+
+  def test_initialize(self):
+    S3("GET", src="s3://mybucket/test", dest="/tmp/test")
+    S3("PUT", src="s3://mybucket/test", dest="/tmp/test")
+
+    with self.assertRaises(SystemExit) as c:
+      S3("GET", src="/tmp/test", dest="s3://mybucket/test")
+    self.assertEqual(c.exception.code, 2)
+    self.assertEqual(S3.STDERR.message, "error: GET must be s3://... => file")
+
+    with self.assertRaises(SystemExit) as c:
+      S3("PUT", src="/tmp/test", dest="s3://mybucket/test")
+    self.assertEqual(S3.STDERR.message, "error: PUT must be file => s3://...")
 
   def test_file_path(self):
     with self.assertRaises(SystemExit) as c:
