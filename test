@@ -5,8 +5,11 @@ import hmac
 import os
 import re
 import sha
+from string import Template
 import StringIO
+import subprocess
 import sys
+import tempfile
 from time import time
 import unittest
 import urllib
@@ -31,6 +34,53 @@ class S3(object):
       S3.exit("error: GET must be s3://... => file", 2)
     if method == "PUT" and d != [True, False]:
       S3.exit("error: PUT must be file => s3://...", 2)
+
+  @staticmethod
+  def curl(request, path, url, cmd=["curl", "--config", "-"], log_ctx=[]):
+    conf = """
+      connect-timeout = 5
+      dump-header     = "$dump_header"
+      max-time        = 60
+      request         = "$request"
+      retry           = 1
+      silent          = "true"
+      speed-time      = 30
+      speed-limit     = 3000
+      write-out       = "code: %{http_code}\\nsize_download: %{size_download}\\nspeed_download: %{speed_download}\\nsize_upload: %{size_upload}\\nspeed_upload: %{speed_upload}\\ntime: %{time_total}"
+      url             = "$url"
+    """
+
+    if request == "PUT":
+      conf += 'upload-file = "$path"'
+    else:
+      conf += 'output = "$path"'
+
+    with tempfile.NamedTemporaryFile() as header_file:
+      conf = Template(conf).substitute(dump_header=header_file.name, path=path, request=request, url=url)
+      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      stdout, stderr = p.communicate(input=conf)
+
+      h = {}
+      for line in header_file.readlines() + stdout.split("\n"):
+        l = line.split(":", 1)
+        if len(l) == 2:
+          h[l[0]] = l[1].strip()
+
+    log_ctx += [
+      ("path",              urlparse.urlparse(url).path),
+      ("x-amz-id-2",        h["x-amz-id-2"]),
+      ("x-amz-request-id",  h["x-amz-request-id"]),
+      ("code",              int(h["code"])),
+      ("size",              int(h["size_download"]) + int(h["size_upload"])),
+      ("speed",             float(h["speed_download"]) + float(h["speed_upload"])),
+      ("time",              float(h["time"])),
+    ]
+
+    if request == "GET" and h["code"] != "200":
+      if os.path.exists(path):
+        os.remove(path)
+
+    return int(h["code"])
 
   @staticmethod
   def exit(msg, code=1):
@@ -113,27 +163,6 @@ class TestS3(unittest.TestCase):
       S3("PUT", src="/tmp/test", dest="s3://mybucket/test")
     self.assertEqual(S3.STDERR.message, "error: PUT must be file => s3://...")
 
-  def test_signed_url(self):
-    del os.environ["S3_ACCESS_KEY_ID"]
-    del os.environ["S3_SECRET_ACCESS_KEY"]
-
-    with self.assertRaises(SystemExit) as c:
-      S3.signed_url("GET", "s3://mybucket/test")
-    self.assertEqual(c.exception.code, 2)
-    self.assertEqual(S3.STDERR.message, "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set")
-
-    os.environ["S3_ACCESS_KEY_ID"]      = "AK4Y..."
-    os.environ["S3_SECRET_ACCESS_KEY"]  = "WXo/..."
-    self.assertEqual(
-      S3.signed_url("GET", "s3://mybucket/test", since=1),
-      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=l77LlE8T87h24owEKXW6XD0dNtk%3D"
-    )
-
-    self.assertEqual(
-      S3.signed_url("PUT", "s3://mybucket/test", since=1),
-      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=Dm963OGiqaMv60eixARsm%2BnrA2w%3D"
-    )
-
   def test_file_path(self):
     with self.assertRaises(SystemExit) as c:
       S3.path("/tmp")
@@ -190,6 +219,49 @@ class TestS3(unittest.TestCase):
     os.environ["S3_PATH_KEY"] = "v2:2539eb9f5257b4608b106c568ab3d5fe"
     self.assertEqual(S3.hash("s3://mybucket/test"), "s3://mybucket/v2/8740785198f0a8cd01cfb6f8a48bd594e326b9c2")
 
+  def test_signed_url(self):
+    del os.environ["S3_ACCESS_KEY_ID"]
+    del os.environ["S3_SECRET_ACCESS_KEY"]
+
+    with self.assertRaises(SystemExit) as c:
+      S3.signed_url("GET", "s3://mybucket/test")
+    self.assertEqual(c.exception.code, 2)
+    self.assertEqual(S3.STDERR.message, "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set")
+
+    os.environ["S3_ACCESS_KEY_ID"]      = "AK4Y..."
+    os.environ["S3_SECRET_ACCESS_KEY"]  = "WXo/..."
+    self.assertEqual(
+      S3.signed_url("GET", "s3://mybucket/test", since=1),
+      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=l77LlE8T87h24owEKXW6XD0dNtk%3D"
+    )
+
+    self.assertEqual(
+      S3.signed_url("PUT", "s3://mybucket/test", since=1),
+      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=Dm963OGiqaMv60eixARsm%2BnrA2w%3D"
+    )
+
+  def test_curl(self):
+    cmd = ["printf", r"code: 200\nsize_download: 10\nsize_upload: 0\nspeed_download: 10\nspeed_upload: 0\ntime: 1\nx-amz-id-2: L4Av...\nx-amz-request-id: 6FC5...\n"]
+    log = []
+    url = S3.signed_url("GET", "s3://mybucket/test", since=1)
+
+    r = S3.curl("GET", "/tmp/test", url, cmd, log)
+    self.assertEqual(r, 200)
+
+    self.assertIn(("path", "/test"),                log)
+    self.assertIn(("size",  10),                    log)
+    self.assertIn(("speed", 10.0),                  log)
+    self.assertIn(("time",  1.0),                   log)
+    self.assertIn(("x-amz-id-2",  "L4Av..."),       log)
+    self.assertIn(("x-amz-request-id",  "6FC5..."), log)
+
+    cmd[1] += r"code: 404\n"
+
+    r  = S3.curl("GET", "/tmp/test", url, cmd, log)
+    self.assertEqual(r, 404)
+
+    # TODO: test config file
+    
 class TestS3Args(unittest.TestCase):
   pass
 
