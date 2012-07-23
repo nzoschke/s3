@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
+import hmac
 import os
 import re
+import sha
 import StringIO
 import sys
 import unittest
@@ -20,6 +22,21 @@ class S3(object):
   def exit(msg, code=1):
     S3.STDERR.write(msg.strip() + "\n")
     sys.exit(code)
+
+  @staticmethod
+  def hash(p):
+    k = os.environ.get("S3_PATH_KEY")
+
+    if not k:
+      S3.exit("error: S3_PATH_KEY not set", 2)
+
+    k = k.split(":", 1)
+    if len(k) != 2:
+      S3.exit("error: S3_PATH_KEY not in v1:c39c... format", 2)
+
+    m   = re.compile("^(s3://[^\/]+)(.*)").match(p)
+    b,p = m.groups()
+    return "%s/%s/%s" % (b, k[0], hmac.new(k[1], p, sha).hexdigest())
 
   @staticmethod
   def path(p):
@@ -90,6 +107,22 @@ class TestS3(unittest.TestCase):
     with self.assertRaises(SystemExit) as c:
       S3.path("s4://mybucket/test")
     self.assertEqual("error: path must use s3:// scheme", S3.STDERR.message)
+
+  def test_hash_path(self):
+    with self.assertRaises(SystemExit) as c:
+      S3.hash("s3://mybucket/test")
+    self.assertEqual(S3.STDERR.message, "error: S3_PATH_KEY not set")
+
+    os.environ["S3_PATH_KEY"] = "5214e99480b444e1fb272486e9e44fa4"
+    with self.assertRaises(SystemExit) as c:
+      S3.hash("s3://mybucket/test")
+    self.assertEqual(S3.STDERR.message, "error: S3_PATH_KEY not in v1:c39c... format")
+
+    os.environ["S3_PATH_KEY"] = "v1:5214e99480b444e1fb272486e9e44fa4"
+    self.assertEqual(S3.hash("s3://mybucket/test"), "s3://mybucket/v1/d94b0959c7bd2478fc2f6cb82b7e8a5bf0ba25d8")
+
+    os.environ["S3_PATH_KEY"] = "v2:2539eb9f5257b4608b106c568ab3d5fe"
+    self.assertEqual(S3.hash("s3://mybucket/test"), "s3://mybucket/v2/8740785198f0a8cd01cfb6f8a48bd594e326b9c2")
 
 class TestS3Args(unittest.TestCase):
   pass
