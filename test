@@ -1,147 +1,15 @@
 #!/usr/bin/env python
-
-import base64
-import hmac
 import os
-import re
-import sha
-from string import Template
-import StringIO
-import subprocess
 import sys
-import tempfile
-from time import time
 import unittest
-import urllib
-import urlparse
+
+sys.path.insert(0, os.path.abspath(os.path.join(__file__, "..")))
+
+from s3 import S3
 
 class _stderr(object):
   def write(self, msg):
     self.message = msg.strip()
-
-class S3(object):
-  STDERR = sys.stderr
-
-  def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
-    self.method = method.upper()
-    self.src    = S3.path(src)
-    self.dest   = S3.path(dest)
-    self.hash   = hash
-    self.ttl    = ttl
-
-    d = [p.startswith("s3://") for p in [self.src, self.dest]]
-    if method == "GET" and d != [True, False]:
-      S3.exit("error: GET must be s3://... => file", 2)
-    if method == "PUT" and d != [True, False]:
-      S3.exit("error: PUT must be file => s3://...", 2)
-
-  @staticmethod
-  def curl(request, path, url, cmd=["curl", "--config", "-"], log_ctx=[]):
-    conf = """
-      connect-timeout = 5
-      dump-header     = "$dump_header"
-      max-time        = 60
-      request         = "$request"
-      retry           = 1
-      silent          = "true"
-      speed-time      = 30
-      speed-limit     = 3000
-      write-out       = "code: %{http_code}\\nsize_download: %{size_download}\\nspeed_download: %{speed_download}\\nsize_upload: %{size_upload}\\nspeed_upload: %{speed_upload}\\ntime: %{time_total}"
-      url             = "$url"
-    """
-
-    if request == "PUT":
-      conf += 'upload-file = "$path"'
-    else:
-      conf += 'output = "$path"'
-
-    with tempfile.NamedTemporaryFile() as header_file:
-      conf = Template(conf).substitute(dump_header=header_file.name, path=path, request=request, url=url)
-      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-      stdout, stderr = p.communicate(input=conf)
-
-      h = {}
-      for line in header_file.readlines() + stdout.split("\n"):
-        l = line.split(":", 1)
-        if len(l) == 2:
-          h[l[0]] = l[1].strip()
-
-    log_ctx += [
-      ("path",              urlparse.urlparse(url).path),
-      ("x-amz-id-2",        h["x-amz-id-2"]),
-      ("x-amz-request-id",  h["x-amz-request-id"]),
-      ("code",              int(h["code"])),
-      ("size",              int(h["size_download"]) + int(h["size_upload"])),
-      ("speed",             float(h["speed_download"]) + float(h["speed_upload"])),
-      ("time",              float(h["time"])),
-    ]
-
-    if request == "GET" and h["code"] != "200":
-      if os.path.exists(path):
-        os.remove(path)
-
-    return int(h["code"])
-
-  @staticmethod
-  def exit(msg, code=1):
-    S3.STDERR.write(msg.strip() + "\n")
-    sys.exit(code)
-
-  @staticmethod
-  def hash(p):
-    k = os.environ.get("S3_PATH_KEY")
-
-    if not k:
-      S3.exit("error: S3_PATH_KEY not set", 2)
-
-    k = k.split(":", 1)
-    if len(k) != 2:
-      S3.exit("error: S3_PATH_KEY not in v1:c39c... format", 2)
-
-    m   = re.compile("^(s3://[^\/]+)(.*)").match(p)
-    b,p = m.groups()
-    return "%s/%s/%s" % (b, k[0], hmac.new(k[1], p, sha).hexdigest())
-
-  @staticmethod
-  def path(p):
-    d,f = os.path.split(p)
-    m   = re.compile("^(\S+)://").match(p)
-
-    if d == "s3:" or f == "" or os.path.isdir(p):
-      S3.exit("error: path %s not a file" % p, 2)
-
-    if m:
-      if m.group(1) != "s3":
-        S3.exit("error: path must use s3:// scheme", 2)
-      return p
-
-    p = os.path.abspath(p)
-    d,f = os.path.split(p)
-
-    if not os.path.exists(d):
-      S3.exit("error: directory %s does not exist" % d, 2)
-
-    return p
-
-  @staticmethod
-  def signed_url(method, url, ttl=2, since=None):
-    try:
-      AWSAccessKeyId      = os.environ["S3_ACCESS_KEY_ID"]
-      AWSSecretAccessKey  = os.environ["S3_SECRET_ACCESS_KEY"]
-    except KeyError, e:
-      S3.exit("error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set", 2)
-
-    uri     = urlparse.urlparse(url)
-    bucket  = uri.hostname
-    key     = uri.path[1:]
-    since   = since or int(time())
-    expires = since + ttl
-
-    canonical_string = "/%s/%s" % (bucket, key)
-    stringToSign = method + "\n\n\n" + str(expires) + "\n" + canonical_string
-    signature = base64.b64encode(hmac.new(AWSSecretAccessKey, stringToSign, sha).digest())
-    return "http://"+bucket+".s3.amazonaws.com/"+urllib.quote(key)+"?AWSAccessKeyId="+urllib.quote(AWSAccessKeyId)+"&Expires="+str(expires)+"&Signature="+urllib.quote(signature)
-
 
 class TestS3(unittest.TestCase):
   def setUp(self):

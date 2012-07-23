@@ -78,61 +78,39 @@ def log(*data):
   sys.stderr.write(" ".join(kvs) + "\n")
 
 class S3(object):
+  STDERR = sys.stderr
+  STDOUT = sys.stdout
+
   def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
-    self.method = method
-    self.src    = src
-    self.dest   = dest
+    self.method = method.upper()
+    self.src    = S3.path(src)
+    self.dest   = S3.path(dest)
     self.hash   = hash
     self.ttl    = ttl
 
-    m = self.method
-    if url:
-      m += "_url"
-    self.__getattribute__(m)()
+    d = [p.startswith("s3://") for p in [self.src, self.dest]]
+    if method == "GET" and d != [True, False]:
+      S3.exit("error: GET must be s3://... => file", 2)
+    if method == "PUT" and d != [True, False]:
+      S3.exit("error: PUT must be file => s3://...", 2)
 
-  def exit(self, msg, code=1):
-    sys.stderr.write(msg.strip() + "\n")
-    sys.exit(code)
 
-  def get_dest(self):
-    return self._dest
+  @log
+  def get(self, log_ctx=[]):
+    return S3.curl("GET", self.dest, S3.signed_url("GET", self.src),  log_ctx)
 
-  def get_src(self):
-    return self._src
+  @log
+  def put(self, log_ctx=[]):
+    return S3.curl("PUT", self.src,  S3.signed_url("PUT", self.dest), log_ctx)
 
-  def set_dest(self, value):
-    self._dest = self.resolve_path(value)
+  def get_url(self):
+    print S3.signed_url("GET", self.src,  self.ttl)
 
-  def set_src(self, value):
-    self._src = self.resolve_path(value, test=True)
-
-  def resolve_path(self, url, test=False):
-    r = list(urlparse.urlsplit(url)) # [scheme, netloc, path, query, fragment]
-
-    if r[0] not in ["", "file", "s3"]:
-      self.exit("error: path must be s3://bucket/... or [file://]... format", code=2)
-
-    if r[0] == "s3":
-      if r[2] == "" or r[2].endswith("/"):
-        self.exit("error: s3 path must include filename", code=2)
-      return urlparse.SplitResult(*r).geturl()
-
-    if r[0] == "file":
-      if not url.startswith("file://"):
-        self.exit("error: path must be s3://bucket/... or [file://]... format", code=2)
-      url = url[7:] # remove file://
-
-    p = os.path.abspath(url)
-    if test:
-      if not os.path.exists(p):
-        self.exit("error: path '%s' does not exist" % p, code=2)
-    return p
-
-  dest = property(get_dest, set_dest)
-  src  = property(get_src,  set_src)
+  def put_url(self):
+    print S3.signed_url("PUT", self.dest, self.ttl)
 
   @staticmethod
-  def curl(request, path, url, log_ctx=[]):
+  def curl(request, path, url, cmd=["curl", "--config", "-"], log_ctx=[]):
     conf = """
       connect-timeout = 5
       dump-header     = "$dump_header"
@@ -153,7 +131,7 @@ class S3(object):
 
     with tempfile.NamedTemporaryFile() as header_file:
       conf = Template(conf).substitute(dump_header=header_file.name, path=path, request=request, url=url)
-      p = subprocess.Popen(["curl", "--config", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
       stdout, stderr = p.communicate(input=conf)
 
       h = {}
@@ -163,6 +141,7 @@ class S3(object):
           h[l[0]] = l[1].strip()
 
     log_ctx += [
+      ("path",              urlparse.urlparse(url).path),
       ("x-amz-id-2",        h["x-amz-id-2"]),
       ("x-amz-request-id",  h["x-amz-request-id"]),
       ("code",              int(h["code"])),
@@ -171,40 +150,71 @@ class S3(object):
       ("time",              float(h["time"])),
     ]
 
-    return h["code"] == "200"
+    if request == "GET" and h["code"] != "200":
+      if os.path.exists(path):
+        os.remove(path)
+
+    return int(h["code"])
 
   @staticmethod
-  def signed_url(method, url, ttl=1):
+  def exit(msg, code=1):
+    S3.STDERR.write(msg.strip() + "\n")
+    sys.exit(code)
+
+  @staticmethod
+  def hash(p):
+    k = os.environ.get("S3_PATH_KEY")
+
+    if not k:
+      S3.exit("error: S3_PATH_KEY not set", 2)
+
+    k = k.split(":", 1)
+    if len(k) != 2:
+      S3.exit("error: S3_PATH_KEY not in v1:c39c... format", 2)
+
+    m   = re.compile("^(s3://[^\/]+)(.*)").match(p)
+    b,p = m.groups()
+    return "%s/%s/%s" % (b, k[0], hmac.new(k[1], p, sha).hexdigest())
+
+  @staticmethod
+  def path(p):
+    d,f = os.path.split(p)
+    m   = re.compile("^(\S+)://").match(p)
+
+    if d == "s3:" or f == "" or os.path.isdir(p):
+      S3.exit("error: path %s not a file" % p, 2)
+
+    if m:
+      if m.group(1) != "s3":
+        S3.exit("error: path must use s3:// scheme", 2)
+      return p
+
+    p = os.path.abspath(p)
+    d,f = os.path.split(p)
+
+    if not os.path.exists(d):
+      S3.exit("error: directory %s does not exist" % d, 2)
+
+    return p
+
+  @staticmethod
+  def signed_url(method, url, ttl=2, since=None):
     try:
       AWSAccessKeyId      = os.environ["S3_ACCESS_KEY_ID"]
       AWSSecretAccessKey  = os.environ["S3_SECRET_ACCESS_KEY"]
     except KeyError, e:
-      print "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set"
-      sys.exit(1)
+      S3.exit("error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set", 2)
 
     uri     = urlparse.urlparse(url)
     bucket  = uri.hostname
     key     = uri.path[1:]
-    expires = int(time()) + ttl
+    since   = since or int(time())
+    expires = since + ttl
 
     canonical_string = "/%s/%s" % (bucket, key)
     stringToSign = method + "\n\n\n" + str(expires) + "\n" + canonical_string
     signature = base64.b64encode(hmac.new(AWSSecretAccessKey, stringToSign, sha).digest())
     return "http://"+bucket+".s3.amazonaws.com/"+urllib.quote(key)+"?AWSAccessKeyId="+urllib.quote(AWSAccessKeyId)+"&Expires="+str(expires)+"&Signature="+urllib.quote(signature)
-
-  @log
-  def get(self, log_ctx=[]):
-    return S3.curl("GET", self.dest, S3.signed_url("GET", self.src),  log_ctx)
-
-  @log
-  def put(self, log_ctx=[]):
-    return S3.curl("PUT", self.src,  S3.signed_url("PUT", self.dest), log_ctx)
-
-  def get_url(self):
-    print S3.signed_url("GET", self.src,  self.ttl)
-
-  def put_url(self):
-    print S3.signed_url("PUT", self.dest, self.ttl)
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(
