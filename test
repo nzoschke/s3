@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+
+import os
+import re
+import StringIO
+import sys
+import unittest
+
+class _stderr(object):
+  def write(self, msg):
+    self.message = msg.strip()
+
+class S3(object):
+  STDERR = sys.stderr
+
+  def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
+    pass
+
+  @staticmethod
+  def exit(msg, code=1):
+    S3.STDERR.write(msg.strip() + "\n")
+    sys.exit(code)
+
+  @staticmethod
+  def path(p):
+    d,f = os.path.split(p)
+    m   = re.compile("^(\S+)://").match(p)
+
+    if d == "s3:" or f == "" or os.path.isdir(p):
+      S3.exit("error: path %s not a file" % p, 2)
+
+    if m:
+      if m.group(1) != "s3":
+        S3.exit("error: path must use s3:// scheme", 2)
+      return p
+
+    p = os.path.abspath(p)
+    d,f = os.path.split(p)
+
+    if not os.path.exists(d):
+      S3.exit("error: directory %s does not exist" % d, 2)
+
+    return p
+
+class TestS3(unittest.TestCase):
+  def setUp(self):
+    S3.STDERR = _stderr()
+    self.s3 = S3("get")
+
+  def tearDown(self):
+    S3.STDERR = sys.stderr
+
+  def test_file_path(self):
+    with self.assertRaises(SystemExit) as c:
+      S3.path("/tmp")
+    self.assertEqual(2, c.exception.code)
+    self.assertEqual("error: path /tmp not a file", S3.STDERR.message)
+
+    self.assertEqual("/tmp/test", S3.path("/tmp/test"))
+
+    with self.assertRaises(SystemExit) as c:
+      S3.path("/tmp/test/")
+    self.assertEqual("error: path /tmp/test/ not a file", S3.STDERR.message)
+
+    with self.assertRaises(SystemExit) as c:
+      S3.path("/tmp/x/test")
+    self.assertEqual("error: directory /tmp/x does not exist", S3.STDERR.message)
+
+    self.assertEqual("/tmp/test", S3.path("/tmp/x/../test"))
+
+  def test_s3_path(self):
+    with self.assertRaises(SystemExit) as c:
+      S3.path("s3://mybucket")
+    self.assertEqual(2, c.exception.code)
+    self.assertEqual("error: path s3://mybucket not a file", S3.STDERR.message)
+
+    with self.assertRaises(SystemExit) as c:
+      S3.path("s3://mybucket/")
+    self.assertEqual("error: path s3://mybucket/ not a file", S3.STDERR.message)
+
+    self.assertEqual("s3://mybucket/test", S3.path("s3://mybucket/test"))
+
+    with self.assertRaises(SystemExit) as c:
+      S3.path("s3://mybucket/test/")
+    self.assertEqual("error: path s3://mybucket/test/ not a file", S3.STDERR.message)
+
+    self.assertEqual("s3://mybucket/x/test", S3.path("s3://mybucket/x/test"))
+
+    # s3:// only
+    with self.assertRaises(SystemExit) as c:
+      S3.path("s4://mybucket/test")
+    self.assertEqual("error: path must use s3:// scheme", S3.STDERR.message)
+
+class TestS3Args(unittest.TestCase):
+  pass
+
+if __name__ == "__main__":
+    unittest.main()
