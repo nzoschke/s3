@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 
+import base64
 import hmac
 import os
 import re
 import sha
 import StringIO
 import sys
+from time import time
 import unittest
+import urllib
+import urlparse
 
 class _stderr(object):
   def write(self, msg):
@@ -69,6 +73,26 @@ class S3(object):
 
     return p
 
+  @staticmethod
+  def signed_url(method, url, ttl=2, since=None):
+    try:
+      AWSAccessKeyId      = os.environ["S3_ACCESS_KEY_ID"]
+      AWSSecretAccessKey  = os.environ["S3_SECRET_ACCESS_KEY"]
+    except KeyError, e:
+      S3.exit("error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set", 2)
+
+    uri     = urlparse.urlparse(url)
+    bucket  = uri.hostname
+    key     = uri.path[1:]
+    since   = since or int(time())
+    expires = since + ttl
+
+    canonical_string = "/%s/%s" % (bucket, key)
+    stringToSign = method + "\n\n\n" + str(expires) + "\n" + canonical_string
+    signature = base64.b64encode(hmac.new(AWSSecretAccessKey, stringToSign, sha).digest())
+    return "http://"+bucket+".s3.amazonaws.com/"+urllib.quote(key)+"?AWSAccessKeyId="+urllib.quote(AWSAccessKeyId)+"&Expires="+str(expires)+"&Signature="+urllib.quote(signature)
+
+
 class TestS3(unittest.TestCase):
   def setUp(self):
     S3.STDERR = _stderr()
@@ -88,6 +112,27 @@ class TestS3(unittest.TestCase):
     with self.assertRaises(SystemExit) as c:
       S3("PUT", src="/tmp/test", dest="s3://mybucket/test")
     self.assertEqual(S3.STDERR.message, "error: PUT must be file => s3://...")
+
+  def test_signed_url(self):
+    del os.environ["S3_ACCESS_KEY_ID"]
+    del os.environ["S3_SECRET_ACCESS_KEY"]
+
+    with self.assertRaises(SystemExit) as c:
+      S3.signed_url("GET", "s3://mybucket/test")
+    self.assertEqual(c.exception.code, 2)
+    self.assertEqual(S3.STDERR.message, "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set")
+
+    os.environ["S3_ACCESS_KEY_ID"]      = "AK4Y..."
+    os.environ["S3_SECRET_ACCESS_KEY"]  = "WXo/..."
+    self.assertEqual(
+      S3.signed_url("GET", "s3://mybucket/test", since=1),
+      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=l77LlE8T87h24owEKXW6XD0dNtk%3D"
+    )
+
+    self.assertEqual(
+      S3.signed_url("PUT", "s3://mybucket/test", since=1),
+      "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=Dm963OGiqaMv60eixARsm%2BnrA2w%3D"
+    )
 
   def test_file_path(self):
     with self.assertRaises(SystemExit) as c:
