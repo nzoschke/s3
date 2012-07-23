@@ -19,16 +19,16 @@ class TestS3(unittest.TestCase):
     S3.STDERR = sys.stderr
 
   def test_initialize(self):
-    S3("GET", src="s3://mybucket/test", dest="/tmp/test")
-    S3("PUT", src="s3://mybucket/test", dest="/tmp/test")
+    S3("get", src="s3://mybucket/test", dest="/tmp/test")
+    S3("put", src="/tmp/test", dest="s3://mybucket/test")
 
     with self.assertRaises(SystemExit) as c:
-      S3("GET", src="/tmp/test", dest="s3://mybucket/test")
+      S3("get", src="/tmp/test", dest="s3://mybucket/test")
     self.assertEqual(c.exception.code, 2)
     self.assertEqual(S3.STDERR.message, "error: GET must be s3://... => file")
 
     with self.assertRaises(SystemExit) as c:
-      S3("PUT", src="/tmp/test", dest="s3://mybucket/test")
+      S3("put", src="s3://mybucket/test", dest="/tmp/test")
     self.assertEqual(S3.STDERR.message, "error: PUT must be file => s3://...")
 
   def test_file_path(self):

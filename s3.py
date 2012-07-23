@@ -75,13 +75,13 @@ def log(*data):
             v = "\"%s\"" % v.replace("\n", " ")
 
         kvs.append("%s=%s" % (d[0], v))
-  sys.stderr.write(" ".join(kvs) + "\n")
+  S3.STDERR.write(" ".join(kvs) + "\n")
 
 class S3(object):
   STDERR = sys.stderr
   STDOUT = sys.stdout
 
-  def __init__(self, method, src=None, dest=None, hash=False, url=False, ttl=30):
+  def __init__(self, method, src=None, dest=None, hash=False, ttl=30):
     self.method = method
     self.src    = S3.path(src)
     self.dest   = S3.path(dest)
@@ -91,13 +91,8 @@ class S3(object):
     d = [p.startswith("s3://") for p in [self.src, self.dest]]
     if method == "get" and d != [True, False]:
       S3.exit("error: GET must be s3://... => file", 2)
-    if method == "get" and d != [True, False]:
+    if method == "put" and d != [False, True]:
       S3.exit("error: PUT must be file => s3://...", 2)
-
-    m = self.method
-    if url:
-      m += "_url"
-    S3.exit(None, self.__getattribute__(m)())
 
   @log
   def get(self, log_ctx=[]):
@@ -257,4 +252,10 @@ if __name__ == "__main__":
       argv += ["--%s" % f, os.environ[k]]
 
   args = parser.parse_args(argv)
-  s3 = S3(**vars(args))
+  s3 = S3(args.method, src=args.src, dest=args.dest, ttl=args.ttl)
+
+  m = args.method
+  if args.url:
+    m += "_url"
+  S3.exit(None, s3.__getattribute__(m)())
+
