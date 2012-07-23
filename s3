@@ -5,6 +5,7 @@ import base64
 import hmac, sha
 import inspect
 import os
+import re
 import shutil
 from string import Template
 import subprocess
@@ -13,6 +14,8 @@ import tempfile
 from time import time
 import urllib
 import urlparse
+
+QUOTABLE = re.compile(r"[\s\\/]")
 
 def register_scheme(scheme):
   for method in filter(lambda s: s.startswith("uses_"), dir(urlparse)):
@@ -35,14 +38,14 @@ def log(*data):
 
       try:
         start = time()
-        log(("file", __file__), ("fn", fn.__name__), ("at", "start"))
+        log(("file", os.path.basename(__file__)), ("fn", fn.__name__), ("at", "start"))
         result = fn(*args, **kw)
-        log(("file", __file__), ("fn", fn.__name__), ("at", "finish"), ("elapsed", time()-start), *log_ctx)
+        log(("file", os.path.basename(__file__)), ("fn", fn.__name__), ("at", "finish"), ("elapsed", time()-start), *log_ctx)
         return result
       except Exception, e:
         exc = sys.exc_info()
         log(
-          ("file", __file__), ("fn", fn.__name__), ("at", "error"), 
+          ("file", os.path.basename(__file__)), ("fn", fn.__name__), ("at", "error"), 
           ("class", "%s.%s" % (exc[0].__module__, exc[0].__name__)), ("message", exc[1]), ("elapsed", time()-start),
           *log_ctx
         )
@@ -53,9 +56,25 @@ def log(*data):
   kvs = []
   for d in data:
     if isinstance(d, basestring):
-      kvs.append(d)
+        kvs.append(d)
     else:
-      kvs.append("%s=%s" % d) # presumably tuple or list
+        s = {
+            "dict":     lambda v: "{..",
+            "list":     lambda v: "[..",
+            "NoneType": lambda v: "none",
+            "float":    lambda v: "%.3f" % v,
+            "datetime": lambda v: v.isoformat(),
+            "date":     lambda v: v.isoformat(),
+        }
+        v = str(d[1])
+        t = type(d[1]).__name__
+        if t in s:
+            v = s[t](d[1])
+
+        if re.search(QUOTABLE, v):
+            v = "\"%s\"" % v.replace("\n", " ")
+
+        kvs.append("%s=%s" % (d[0], v))
   sys.stderr.write(" ".join(kvs) + "\n")
 
 class S3(object):
