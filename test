@@ -21,8 +21,8 @@ class TestS3(unittest.TestCase):
     S3.STDERR = sys.stderr
 
   def test_initialize(self):
-    S3("get", "s3://mybucket/test", file="/tmp/test")
-    S3("put", "s3://mybucket/test", file="/tmp/test")
+    S3("s3://mybucket/test", file="/tmp/test")
+    S3("s3://mybucket/test", file="/tmp/test")
 
   def test_file_path(self):
     with self.assertRaises(SystemExit) as c:
@@ -42,69 +42,69 @@ class TestS3(unittest.TestCase):
 
     self.assertEqual(S3.path("/tmp/x/../test"), "/tmp/test")
 
-  def test_s3_path(self):
+  def test_s3_url(self):
     with self.assertRaises(SystemExit) as c:
-      S3.path("s3://mybucket")
+      S3.s3_url("s3://mybucket")
     self.assertEqual(c.exception.code, 2)
-    self.assertEqual(S3.STDERR.message, "error: path s3://mybucket not a file")
+    self.assertEqual(S3.STDERR.message, "error: url must use s3://bucket/path... scheme")
 
     with self.assertRaises(SystemExit) as c:
-      S3.path("s3://mybucket/")
-    self.assertEqual(S3.STDERR.message, "error: path s3://mybucket/ not a file")
+      S3.s3_url("s3://mybucket/")
+    self.assertEqual(S3.STDERR.message, "error: url must use s3://bucket/path... scheme")
 
-    self.assertEqual(S3.path("s3://mybucket/test"), "s3://mybucket/test")
-
-    with self.assertRaises(SystemExit) as c:
-      S3.path("s3://mybucket/test/")
-    self.assertEqual(S3.STDERR.message, "error: path s3://mybucket/test/ not a file")
-
-    self.assertEqual(S3.path("s3://mybucket/x/test"), "s3://mybucket/x/test")
+    self.assertEqual(S3.s3_url("s3://mybucket/test").geturl(), "s3://mybucket/test")
 
     with self.assertRaises(SystemExit) as c:
-      S3.path("s4://mybucket/test")
-    self.assertEqual(S3.STDERR.message, "error: path must use s3:// scheme")
+      S3.s3_url("s3://mybucket/test/")
+    self.assertEqual(S3.STDERR.message, "error: url must use s3://bucket/path... scheme")
+
+    self.assertEqual(S3.s3_url("s3://mybucket/x/test").geturl(), "s3://mybucket/x/test")
+
+    with self.assertRaises(SystemExit) as c:
+      S3.s3_url("s4://mybucket/test")
+    self.assertEqual(S3.STDERR.message, "error: url must use s3://bucket/path... scheme")
 
   def test_hash_path(self):
     with self.assertRaises(SystemExit) as c:
-      S3.hash("s3://mybucket/test")
+      S3.hash("/test")
     self.assertEqual(S3.STDERR.message, "error: S3_PATH_KEY not set")
 
     os.environ["S3_PATH_KEY"] = "5214e99480b444e1fb272486e9e44fa4"
     with self.assertRaises(SystemExit) as c:
-      S3.hash("s3://mybucket/test")
+      S3.hash("/test")
     self.assertEqual(S3.STDERR.message, "error: S3_PATH_KEY not in v1:c39c... format")
 
     os.environ["S3_PATH_KEY"] = "v1:5214e99480b444e1fb272486e9e44fa4"
-    self.assertEqual(S3.hash("s3://mybucket/test"), "s3://mybucket/v1/d94b0959c7bd2478fc2f6cb82b7e8a5bf0ba25d8")
+    self.assertEqual(S3.hash("/test"), "/v1/d94b0959c7bd2478fc2f6cb82b7e8a5bf0ba25d8")
 
     os.environ["S3_PATH_KEY"] = "v2:2539eb9f5257b4608b106c568ab3d5fe"
-    self.assertEqual(S3.hash("s3://mybucket/test"), "s3://mybucket/v2/8740785198f0a8cd01cfb6f8a48bd594e326b9c2")
+    self.assertEqual(S3.hash("/test"), "/v2/8740785198f0a8cd01cfb6f8a48bd594e326b9c2")
 
   def test_signed_url(self):
     del os.environ["S3_ACCESS_KEY_ID"]
     del os.environ["S3_SECRET_ACCESS_KEY"]
 
     with self.assertRaises(SystemExit) as c:
-      S3.signed_url("GET", "s3://mybucket/test")
+      S3.signed_url("GET", "mybucket", "/test")
     self.assertEqual(c.exception.code, 2)
     self.assertEqual(S3.STDERR.message, "error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set")
 
     os.environ["S3_ACCESS_KEY_ID"]      = "AK4Y..."
     os.environ["S3_SECRET_ACCESS_KEY"]  = "WXo/..."
     self.assertEqual(
-      S3.signed_url("GET", "s3://mybucket/test", since=1),
+      S3.signed_url("GET", "mybucket", "/test", since=1),
       "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=l77LlE8T87h24owEKXW6XD0dNtk%3D"
     )
 
     self.assertEqual(
-      S3.signed_url("PUT", "s3://mybucket/test", since=1),
+      S3.signed_url("PUT", "mybucket", "/test", since=1),
       "http://mybucket.s3.amazonaws.com/test?AWSAccessKeyId=AK4Y...&Expires=3&Signature=Dm963OGiqaMv60eixARsm%2BnrA2w%3D"
     )
 
   def test_curl(self):
     cmd = ["printf", r"code: 200\nsize_download: 10\nsize_upload: 0\nspeed_download: 10\nspeed_upload: 0\ntime: 1\nx-amz-id-2: L4Av...\nx-amz-request-id: 6FC5...\n"]
     log = []
-    url = S3.signed_url("GET", "s3://mybucket/test", since=1)
+    url = S3.signed_url("GET", "mybucket", "/test", since=1)
 
     r = S3.curl("GET", "/tmp/test", url, cmd, log)
     self.assertEqual(r, 200)

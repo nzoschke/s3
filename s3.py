@@ -17,12 +17,6 @@ import urlparse
 
 QUOTABLE = re.compile(r"[\s\\/]")
 
-def register_scheme(scheme):
-  for method in filter(lambda s: s.startswith("uses_"), dir(urlparse)):
-    getattr(urlparse, method).append(scheme)
-
-register_scheme("s3")
-
 def log(*data):
   # log() is a decorator if first argument is a function, otherwise a printer
   data = list(data)
@@ -81,33 +75,37 @@ class S3(object):
   STDERR = sys.stderr
   STDOUT = sys.stdout
 
-  def __init__(self, method, url, file=None, hash=False, ttl=30):
-    self.method = method
-    self.url    = S3.s3_path(url)
-    self.ttl    = ttl
+  def __init__(self, url, file=None, hash=False, ttl=1):
+    r = S3.s3_url(url)
+    self.url    = r.geturl()
+    self.bucket = r.netloc
+    self.path   = r.path
 
     if file:
       self.file = S3.path(file)
 
     if hash:
-      self.url = S3.hash(self.url)
+      self.path = S3.hash(self.path)
+
+    self.get_url = S3.signed_url("GET", self.bucket, self.path, ttl)
+    self.put_url = S3.signed_url("PUT", self.bucket, self.path, ttl)
 
   def get(self):
-    S3.STDOUT.write(S3.signed_url("GET", self.url, self.ttl) + "\n")
+    S3.STDOUT.write(self.get_url + "\n")
     return 0
 
   def put(self):
-    S3.STDOUT.write(S3.signed_url("PUT", self.url, self.ttl) + "\n")
+    S3.STDOUT.write(self.put_url + "\n")
     return 0
 
   @log
   def get_file(self, log_ctx=[]):
-    code = S3.curl("GET", self.file, S3.signed_url("GET", self.url), log_ctx=log_ctx)
+    code = S3.curl("GET", self.file, self.get_url, log_ctx=log_ctx)
     return 0 if code == 200 else code
 
   @log
   def put_file(self, log_ctx=[]):
-    code = S3.curl("PUT", self.file, S3.signed_url("PUT", self.url), log_ctx=log_ctx)
+    code = S3.curl("PUT", self.file, self.put_url, log_ctx=log_ctx)
     return 0 if code == 200 else code
 
   @staticmethod
@@ -174,25 +172,14 @@ class S3(object):
     if len(k) != 2:
       S3.exit("error: S3_PATH_KEY not in v1:c39c... format", 2)
 
-    m = re.compile("^(s3://[^\/]+)(.*)").match(p)
-    if not m:
-      return p
-
-    b,p = m.groups()
-    return "%s/%s/%s" % (b, k[0], hmac.new(k[1], p, sha).hexdigest())
+    return "/%s/%s" % (k[0], hmac.new(k[1], p, sha).hexdigest())
 
   @staticmethod
   def path(p):
     d,f = os.path.split(p)
-    m   = re.compile("^(\S+)://").match(p)
 
-    if d == "s3:" or f == "" or os.path.isdir(p):
+    if f == "" or os.path.isdir(p):
       S3.exit("error: path %s not a file" % p, 2)
-
-    if m:
-      if m.group(1) != "s3":
-        S3.exit("error: path must use s3:// scheme", 2)
-      return p
 
     p = os.path.abspath(p)
     d,f = os.path.split(p)
@@ -203,28 +190,21 @@ class S3(object):
     return p
 
   @staticmethod
-  def s3_path(p):
-    d,f = os.path.split(p)
-    m   = re.compile("^(\S+)://").match(p)
-
-    if d == "s3:" or f == "" or os.path.isdir(p):
-      S3.exit("error: path %s not a file" % p, 2)
-
-    if not m or m.group(1) != "s3":
-      S3.exit("error: url must use s3:// scheme", 2)
-    return p
+  def s3_url(url):
+    r = urlparse.urlparse(url)
+    if r.scheme != "s3" or r.path == "" or r.path.endswith("/"):
+      S3.exit("error: url must use s3://bucket/path... scheme", 2)
+    return r
 
   @staticmethod
-  def signed_url(method, url, ttl=2, since=None):
+  def signed_url(method, bucket, path, ttl=2, since=None):
     try:
       AWSAccessKeyId      = os.environ["S3_ACCESS_KEY_ID"]
       AWSSecretAccessKey  = os.environ["S3_SECRET_ACCESS_KEY"]
     except KeyError, e:
       S3.exit("error: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY not set", 2)
 
-    uri     = urlparse.urlparse(url)
-    bucket  = uri.hostname
-    key     = uri.path[1:]
+    key     = path[1:]
     since   = since or int(time())
     expires = since + ttl
 
@@ -256,6 +236,5 @@ if __name__ == "__main__":
   if args.file:
     method += "_file"
 
-  s3 = S3(args.method, s3_url, file=file, hash=args.hash, ttl=args.ttl)
+  s3 = S3(s3_url, file=file, hash=args.hash, ttl=args.ttl)
   S3.exit(None, s3.__getattribute__(method)())
-
