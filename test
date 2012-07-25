@@ -123,8 +123,5 @@ class TestS3(unittest.TestCase):
 
     # TODO: test config file
     
-class TestS3Args(unittest.TestCase):
-  pass
-
 if __name__ == "__main__":
     unittest.main()
