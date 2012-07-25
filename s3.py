@@ -245,21 +245,17 @@ if __name__ == "__main__":
   parser.add_argument("method",  help="HTTP method to perform", choices=["get", "put"])
   parser.add_argument("s3_url",  help="s3://... URL to GET object from or PUT object to")
   parser.add_argument("--ttl",   help="Signed URL time to live in seconds (default 30)", type=int, default=30)
-  parser.add_argument("--hash",  help="Hash s3:/.../path with S3_PATH_KEY", action="store_true")
+  parser.add_argument("--hash",  help="Hash s3://.../path with S3_PATH_KEY", action="store_true")
   parser.add_argument("--file",  help="Local file to write GET contents, or to read PUT contents")
 
-  # read S3_DEST, S3_SRC args from env
-  argv = sys.argv[1:]
-  if os.environ.get("S3_FILE"):
-    argv += ["--%s" % f, os.environ["S3_FILE"]]
-  if os.environ.get("S3_URL"):
-    argv += [S3_URL]
+  args = parser.parse_args()
 
-  args = parser.parse_args(argv)
-  s3 = S3(args.method, args.s3_url, file=args.file, hash=args.hash, ttl=args.ttl)
-
-  m = args.method
+  s3_url  = os.environ.get("S3_URL",  args.s3_url)
+  file    = os.environ.get("S3_FILE", args.file)
+  method  = args.method
   if args.file:
-    m += "_file"
-  S3.exit(None, s3.__getattribute__(m)())
+    method += "_file"
+
+  s3 = S3(args.method, s3_url, file=file, hash=args.hash, ttl=args.ttl)
+  S3.exit(None, s3.__getattribute__(method)())
 
