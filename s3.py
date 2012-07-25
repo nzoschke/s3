@@ -222,11 +222,11 @@ if __name__ == "__main__":
     """
   )
 
-  parser.add_argument("method",  help="HTTP method to perform", choices=["get", "put"])
-  parser.add_argument("s3_url",  help="s3://... URL to GET object from or PUT object to")
-  parser.add_argument("--ttl",   help="Signed URL time to live in seconds (default 30)", type=int, default=30)
-  parser.add_argument("--hash",  help="Hash s3://.../path with S3_PATH_KEY", action="store_true")
-  parser.add_argument("--file",  help="Local file to write GET contents, or to read PUT contents")
+  parser.add_argument("method",  help="perform method", choices=["get", "put"])
+  parser.add_argument("s3_url",  help="s3://mybucket/path... URL")
+  parser.add_argument("--file",  help="write GET contents to, or read PUT contents from local file")
+  parser.add_argument("--ttl",   help="set time to live for URL in seconds (default 30)", type=int, default=30)
+  parser.add_argument("--hash",  help="hash s3_url /path with S3_PATH_KEY", action="store_true")
 
   argv = sys.argv[1:]
 
