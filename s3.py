@@ -228,13 +228,19 @@ if __name__ == "__main__":
   parser.add_argument("--hash",  help="Hash s3://.../path with S3_PATH_KEY", action="store_true")
   parser.add_argument("--file",  help="Local file to write GET contents, or to read PUT contents")
 
-  args = parser.parse_args()
+  argv = sys.argv[1:]
 
-  s3_url  = os.environ.get("S3_URL",  args.s3_url)
-  file    = os.environ.get("S3_FILE", args.file)
+  if os.environ.get("S3_URL"):
+    argv += [os.environ["S3_URL"]]
+
+  if os.environ.get("S3_FILE"):
+    argv += ["--file", os.environ["S3_FILE"]]
+
+  args = parser.parse_args(argv)
+
   method  = args.method
   if args.file:
     method += "_file"
 
-  s3 = S3(s3_url, file=file, hash=args.hash, ttl=args.ttl)
+  s3 = S3(args.s3_url, file=args.file, hash=args.hash, ttl=args.ttl)
   S3.exit(None, s3.__getattribute__(method)())
